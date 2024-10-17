@@ -1,29 +1,75 @@
-#!/usr/bin/env python3
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import MetaData, ForeignKey
+from sqlalchemy.orm import validates, relationship
+from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy_serializer import SerializerMixin
 
-from models import db, Restaurant, RestaurantPizza, Pizza
-from flask_migrate import Migrate
-from flask import Flask, request, make_response
-from flask_restful import Api, Resource
-import os
+metadata = MetaData(naming_convention={
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+})
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.environ.get(
-    "DB_URI", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
-
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.json.compact = False
-
-migrate = Migrate(app, db)
-
-db.init_app(app)
+db = SQLAlchemy(metadata=metadata)
 
 
-@app.route('/')
-def index():
-    return '<h1>Code challenge</h1>'
+class Restaurant(db.Model, SerializerMixin):
+    __tablename__ = 'restaurants'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    address = db.Column(db.String, nullable=False)
+
+    # Relationship: A restaurant has many pizzas through RestaurantPizza
+    restaurant_pizzas = relationship('RestaurantPizza', back_populates='restaurant', cascade='all, delete-orphan')
+    pizzas = association_proxy('restaurant_pizzas', 'pizza')
+
+    # Limit serialization depth and avoid recursive loops
+    serialize_rules = ('-restaurant_pizzas.restaurant',)
+
+    def __repr__(self):
+        return f'<Restaurant {self.name}>'
 
 
-if __name__ == '__main__':
-    app.run(port=5555, debug=True)
+class Pizza(db.Model, SerializerMixin):
+    __tablename__ = 'pizzas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    ingredients = db.Column(db.String, nullable=False)
+
+    # Relationship: A pizza has many restaurants through RestaurantPizza
+    restaurant_pizzas = relationship('RestaurantPizza', back_populates='pizza')
+    restaurants = association_proxy('restaurant_pizzas', 'restaurant')
+
+    # Limit serialization depth and avoid recursive loops
+    serialize_rules = ('-restaurant_pizzas.pizza',)
+
+    def __repr__(self):
+        return f'<Pizza {self.name}, {self.ingredients}>'
+
+
+class RestaurantPizza(db.Model, SerializerMixin):
+    __tablename__ = 'restaurant_pizzas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    price = db.Column(db.Integer, nullable=False)
+
+    # Foreign keys for Restaurant and Pizza
+    restaurant_id = db.Column(db.Integer, ForeignKey('restaurants.id'), nullable=False)
+    pizza_id = db.Column(db.Integer, ForeignKey('pizzas.id'), nullable=False)
+
+    # Relationships
+    restaurant = relationship('Restaurant', back_populates='restaurant_pizzas')
+    pizza = relationship('Pizza', back_populates='restaurant_pizzas')
+
+    # Limit serialization depth and avoid recursive loops
+    serialize_rules = ('-restaurant.restaurant_pizzas', '-pizza.restaurant_pizzas')
+
+    # Validation for price
+    @validates('price')
+    def validate_price(self, key, price):
+        if not 1 <= price <= 30:
+            raise ValueError("Price must be between 1 and 30")
+        return price
+
+    def __repr__(self):
+        return f'<RestaurantPizza ${self.price}>'
